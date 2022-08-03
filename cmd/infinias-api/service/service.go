@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"os/exec"
@@ -89,14 +90,14 @@ func (s *ServiceConfig) Uninstall() error {
 }
 
 // Service returns a new Service for use with svc.Run
-func (s *ServiceConfig) Service(main func() error) *Service {
+func (s *ServiceConfig) Service(main func(w io.Writer) error) *Service {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &Service{main: main, logPath: s.LogPath, ctx: ctx, cancel: cancel}
 }
 
 // Service implements svc.Service
 type Service struct {
-	main    func() error
+	main    func(io.Writer) error
 	logPath string
 	fi      *os.File
 	err     error
@@ -130,7 +131,7 @@ func (s *Service) Init(env svc.Environment) error {
 func (s *Service) Start() error {
 	log.Println("starting service")
 	go func() {
-		if err := s.main(); err != nil {
+		if err := s.main(s.fi); err != nil {
 			s.err = err
 		}
 		s.cancel()

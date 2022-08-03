@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -27,7 +28,7 @@ var ServiceConfig = &service.ServiceConfig{
 	DisplayName: "Infinias API (Go)",
 }
 
-func run() error {
+func run(w io.Writer) error {
 	f, err := os.Open(filepath.Join(DefaultRoot, "config.yaml"))
 	if err != nil {
 		return fmt.Errorf("could not open config: %w", err)
@@ -76,7 +77,7 @@ func run() error {
 	mux := http.NewServeMux()
 	mux.Handle("/", http.StripPrefix("/api/1.0", s.Handler()))
 	log.Println("Listening on", config.HTTP.ListenAddr)
-	return http.ListenAndServe(config.HTTP.ListenAddr, handlers.CombinedLoggingHandler(os.Stdout, mux))
+	return http.ListenAndServe(config.HTTP.ListenAddr, handlers.CombinedLoggingHandler(w, mux))
 }
 
 func main() {
@@ -106,7 +107,7 @@ func main() {
 	if err := svc.Run(s); err != nil {
 		if err == service.ErrNotWindowsService {
 			log.Println("not started as windows service; running in terminal")
-			log.Println(run())
+			log.Println(run(os.Stdout))
 			return
 		}
 		log.Println("could not start service:", err)
