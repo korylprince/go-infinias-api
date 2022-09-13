@@ -100,7 +100,6 @@ type Service struct {
 	main    func(io.Writer) error
 	logPath string
 	fi      *os.File
-	err     error
 	ctx     context.Context
 	cancel  context.CancelFunc
 }
@@ -131,8 +130,10 @@ func (s *Service) Init(env svc.Environment) error {
 func (s *Service) Start() error {
 	log.Println("starting service")
 	go func() {
-		if err := s.main(s.fi); err != nil {
-			s.err = err
+		if err := DefaultRetryStrategy.Retry(func() error {
+			return s.main(s.fi)
+		}); err != nil {
+			log.Println("service retries exhausted:", err)
 		}
 		s.cancel()
 	}()
@@ -143,5 +144,5 @@ func (s *Service) Start() error {
 func (s *Service) Stop() error {
 	log.Println("stopping service")
 	s.fi.Sync()
-	return s.err
+	return nil
 }
