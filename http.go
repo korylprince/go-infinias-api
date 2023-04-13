@@ -60,20 +60,27 @@ func (s *Service) HandleJSON(next func(r *http.Request) (interface{}, error)) ht
 	})
 }
 
+func (s *Service) okHandler(f func(r *http.Request) error) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ok := &jsonResponse{Code: http.StatusOK, Description: "200 OK"}
+		err := f(r)
+		s.HandleJSON(func(r *http.Request) (interface{}, error) {
+			return ok, err
+		}).ServeHTTP(w, r)
+	})
+}
+
 func (s *Service) Handler() http.Handler {
 	mux := mux.NewRouter()
 
 	mux.Path("/people").Methods(http.MethodPost).Handler(s.HandleJSON(s.CreatePersonHandler))
 	mux.Path("/people/{id}").Methods(http.MethodGet).Handler(s.HandleJSON(s.ReadPersonHandler))
 	mux.Path("/people/{id}").Methods(http.MethodPut).Handler(s.HandleJSON(s.UpdatePersonHandler))
-	mux.Path("/people/{id}").Methods(http.MethodDelete).HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ok := &jsonResponse{Code: http.StatusOK, Description: "200 OK"}
-		err := s.DeletePersonHandler(r)
-		s.HandleJSON(func(r *http.Request) (interface{}, error) {
-			return ok, err
-		}).ServeHTTP(w, r)
-	})
-	mux.Path("/people").Methods(http.MethodGet).Handler(s.HandleJSON(s.ListPersonHandler))
+	mux.Path("/people/{id}").Methods(http.MethodDelete).Handler(s.okHandler(s.DeletePersonHandler))
+	mux.Path("/people").Methods(http.MethodGet).Handler(s.HandleJSON(s.ListPeopleHandler))
+	mux.Path("/people/{id}/credentials").Methods(http.MethodPost).Handler(s.HandleJSON(s.CreateCredentialHandler))
+	mux.Path("/people/{id}/credentials/{credid}").Methods(http.MethodDelete).Handler(s.okHandler(s.DeleteCredentialHandler))
+	mux.Path("/people/{id}/credentials").Methods(http.MethodGet).Handler(s.HandleJSON(s.ListCredentialsHandler))
 	mux.Path("/groups").Methods(http.MethodGet).Handler(s.HandleJSON(s.ListGroupsHandler))
 
 	return s.WithAuth(mux)
@@ -200,7 +207,7 @@ func (s *Service) DeletePersonHandler(r *http.Request) error {
 	return nil
 }
 
-func (s *Service) ListPersonHandler(r *http.Request) (interface{}, error) {
+func (s *Service) ListPeopleHandler(r *http.Request) (interface{}, error) {
 	people, err := s.ListPeople()
 	if err != nil {
 		return nil, &HTTPError{StatusCode: http.StatusInternalServerError, Err: fmt.Errorf("could not list people: %w", err)}
@@ -216,4 +223,87 @@ func (s *Service) ListGroupsHandler(r *http.Request) (interface{}, error) {
 	}
 
 	return groups, nil
+}
+
+func (s *Service) CreateCredentialHandler(r *http.Request) (interface{}, error) {
+	type response struct {
+		ID int `json:"id"`
+	}
+
+	idStr := mux.Vars(r)["id"]
+	if idStr == "" {
+		return nil, &HTTPError{StatusCode: http.StatusBadRequest, Err: fmt.Errorf("could not read id: %w", ErrInvalidID)}
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		return nil, &HTTPError{StatusCode: http.StatusBadRequest, Err: fmt.Errorf("could not read id: %w", err)}
+	}
+
+	cred := new(Credential)
+	if err := json.NewDecoder(r.Body).Decode(cred); err != nil {
+		return nil, &HTTPError{StatusCode: http.StatusBadRequest, Err: fmt.Errorf("could not read body: %w", err)}
+	}
+
+	credID, err := s.CreateCredential(id, cred)
+	if err != nil {
+		code := http.StatusInternalServerError
+		if errors.Is(err, db.ErrCredentialExists) {
+			code = http.StatusConflict
+		}
+		return nil, &HTTPError{StatusCode: code, Err: fmt.Errorf("could not create credential: %w", err)}
+	}
+
+	return &response{ID: credID}, nil
+}
+
+func (s *Service) DeleteCredentialHandler(r *http.Request) error {
+	type response struct {
+		ID int `json:"id"`
+	}
+
+	idStr := mux.Vars(r)["id"]
+	if idStr == "" {
+		return &HTTPError{StatusCode: http.StatusBadRequest, Err: fmt.Errorf("could not read id: %w", ErrInvalidID)}
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		return &HTTPError{StatusCode: http.StatusBadRequest, Err: fmt.Errorf("could not read id: %w", err)}
+	}
+
+	credIDStr := mux.Vars(r)["credid"]
+	if idStr == "" {
+		return &HTTPError{StatusCode: http.StatusBadRequest, Err: fmt.Errorf("could not read credential id: %w", ErrInvalidID)}
+	}
+	credID, err := strconv.Atoi(credIDStr)
+	if err != nil {
+		return &HTTPError{StatusCode: http.StatusBadRequest, Err: fmt.Errorf("could not read credential id: %w", err)}
+	}
+
+	if err := s.DeleteCredential(id, credID); err != nil {
+		return &HTTPError{StatusCode: http.StatusInternalServerError, Err: fmt.Errorf("could not delete credential: %w", err)}
+	}
+
+	return nil
+}
+
+func (s *Service) ListCredentialsHandler(r *http.Request) (interface{}, error) {
+	type response struct {
+		ID int `json:"id"`
+	}
+
+	idStr := mux.Vars(r)["id"]
+	if idStr == "" {
+		return nil, &HTTPError{StatusCode: http.StatusBadRequest, Err: fmt.Errorf("could not read id: %w", ErrInvalidID)}
+	}
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		return nil, &HTTPError{StatusCode: http.StatusBadRequest, Err: fmt.Errorf("could not read id: %w", err)}
+	}
+
+	creds, err := s.ListCredentials(id)
+	if err != nil {
+		return nil, &HTTPError{StatusCode: http.StatusInternalServerError, Err: fmt.Errorf("could not list credentials: %w", err)}
+	}
+
+	return creds, nil
 }

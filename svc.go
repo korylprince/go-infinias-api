@@ -11,16 +11,17 @@ import (
 var ErrInvalidID = errors.New("invalid id")
 
 type Person struct {
-	ID          int    `json:"id"`
-	FirstName   string `json:"first_name"`
-	LastName    string `json:"last_name"`
-	EmployeeID  string `json:"employee_id"`
-	Department  string `json:"department"`
-	SiteCode    int    `json:"site_code"`
-	CardCode    int    `json:"card_code"`
-	Image       []byte `json:"image,omitempty"`
-	HasImage    bool   `json:"has_image"`
-	GroupsToAdd []int  `json:"groups_to_add,omitempty"`
+	ID          int           `json:"id"`
+	FirstName   string        `json:"first_name"`
+	LastName    string        `json:"last_name"`
+	EmployeeID  string        `json:"employee_id"`
+	Department  string        `json:"department"`
+	SiteCode    int           `json:"site_code"`
+	CardCode    int           `json:"card_code"`
+	Image       []byte        `json:"image,omitempty"`
+	HasImage    bool          `json:"has_image"`
+	GroupsToAdd []int         `json:"groups_to_add,omitempty"`
+	Credentials []*Credential `json:"credentials,omitempty"`
 }
 
 type Group struct {
@@ -57,6 +58,16 @@ func (s *Service) CreatePerson(p *Person) (int, error) {
 		return 0, fmt.Errorf("could not update picture: %w", err)
 	}
 
+	for _, cred := range p.Credentials {
+		if cred.SiteCode == p.SiteCode && cred.CardCode == p.CardCode {
+			continue
+		}
+
+		if _, err := s.DBConn.CreateCredential(id, (*db.Credential)(cred)); err != nil {
+			return 0, fmt.Errorf("could not create credential (%d-%d): %w", cred.SiteCode, cred.CardCode, err)
+		}
+	}
+
 	return id, nil
 }
 
@@ -73,16 +84,27 @@ func (s *Service) ReadPerson(id int) (*Person, error) {
 		}
 	}
 
+	creds, err := s.DBConn.ListCredentials(id)
+	if err != nil {
+		return nil, fmt.Errorf("could not read credentials: %w", err)
+	}
+
+	newcreds := make([]*Credential, len(creds))
+	for idx, c := range creds {
+		newcreds[idx] = (*Credential)(c)
+	}
+
 	return &Person{
-		ID:         p.ID,
-		FirstName:  p.FirstName,
-		LastName:   p.LastName,
-		EmployeeID: p.EmployeeID,
-		Department: p.Department,
-		SiteCode:   p.SiteCode,
-		CardCode:   p.CardCode,
-		HasImage:   len(buf) != 0,
-		Image:      buf,
+		ID:          p.ID,
+		FirstName:   p.FirstName,
+		LastName:    p.LastName,
+		EmployeeID:  p.EmployeeID,
+		Department:  p.Department,
+		SiteCode:    p.SiteCode,
+		CardCode:    p.CardCode,
+		HasImage:    len(buf) != 0,
+		Image:       buf,
+		Credentials: newcreds,
 	}, nil
 }
 
@@ -111,6 +133,16 @@ func (s *Service) UpdatePerson(p *Person) error {
 		return fmt.Errorf("could not update picture: %w", err)
 	}
 
+	for _, cred := range p.Credentials {
+		if cred.SiteCode == p.SiteCode && cred.CardCode == p.CardCode {
+			continue
+		}
+
+		if _, err := s.DBConn.CreateCredential(p.ID, (*db.Credential)(cred)); err != nil {
+			return fmt.Errorf("could not create credential (%d-%d): %w", cred.SiteCode, cred.CardCode, err)
+		}
+	}
+
 	return nil
 }
 
@@ -137,23 +169,38 @@ func (s *Service) ListPeople() ([]*Person, error) {
 		idSet[i] = struct{}{}
 	}
 
-	depts, err := s.DBConn.ReadDepartments()
+	depts, err := s.DBConn.ListDepartments()
 	if err != nil {
 		return nil, fmt.Errorf("could not list departments: %w", err)
+	}
+
+	credMap, err := s.DBConn.ListAllCredentials()
+	if err != nil {
+		return nil, fmt.Errorf("could not list credentials: %w", err)
 	}
 
 	people := make([]*Person, len(apiPeople))
 	for idx, p := range apiPeople {
 		_, ok := idSet[p.ID]
+
+		var newcreds []*Credential
+		if creds := credMap[p.ID]; len(creds) > 0 {
+			newcreds = make([]*Credential, len(creds))
+			for idx, c := range creds {
+				newcreds[idx] = (*Credential)(c)
+			}
+		}
+
 		people[idx] = &Person{
-			ID:         p.ID,
-			FirstName:  p.FirstName,
-			LastName:   p.LastName,
-			EmployeeID: p.EmployeeID,
-			Department: depts[p.ID],
-			SiteCode:   p.SiteCode,
-			CardCode:   p.CardCode,
-			HasImage:   ok,
+			ID:          p.ID,
+			FirstName:   p.FirstName,
+			LastName:    p.LastName,
+			EmployeeID:  p.EmployeeID,
+			Department:  depts[p.ID],
+			SiteCode:    p.SiteCode,
+			CardCode:    p.CardCode,
+			HasImage:    ok,
+			Credentials: newcreds,
 		}
 	}
 
@@ -175,4 +222,42 @@ func (s *Service) ListGroups() ([]*Group, error) {
 	}
 
 	return groups, nil
+}
+
+type Credential struct {
+	ID       int  `json:"id,omitempty"`
+	Active   bool `json:"active"`
+	SiteCode int  `json:"site_code"`
+	CardCode int  `json:"card_code"`
+}
+
+func (s *Service) CreateCredential(id int, cred *Credential) (int, error) {
+	credID, err := s.DBConn.CreateCredential(id, (*db.Credential)(cred))
+	if err != nil {
+		return 0, err
+	}
+
+	return credID, nil
+}
+
+func (s *Service) DeleteCredential(id, credID int) error {
+	if err := s.DBConn.DeleteCredential(id, credID); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *Service) ListCredentials(id int) ([]*Credential, error) {
+	creds, err := s.DBConn.ListCredentials(id)
+	if err != nil {
+		return nil, err
+	}
+
+	newcreds := make([]*Credential, len(creds))
+	for idx, c := range creds {
+		newcreds[idx] = (*Credential)(c)
+	}
+
+	return newcreds, nil
 }
